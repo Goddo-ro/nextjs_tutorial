@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { signIn } from '@/auth';
 import { AuthError } from 'next-auth';
+import bcrypt from 'bcrypt';
 
 const FormSchema = z.object({
     id: z.string(),
@@ -128,4 +129,77 @@ export async function authenticate(
     }
     throw error;
   }
+}
+
+const RegisterSchema = z.object({
+  email: z
+        .string()
+        .email("This is not a valid email."),
+  password: z
+            .string()
+            .min(6, "Minimum length for password is 4."),
+  passwordConfirm: z
+                    .string()
+}).refine((data) => data.password === data.passwordConfirm, {
+  message: "Passwords don't match.",
+  path: ["passwordConfirm"]
+});
+
+export interface RegisterState {
+  errors?: {
+    email?: string[],
+    password?: string[],
+    passwordConfirm?: string[],
+  },
+  message?: string | null;
+}
+
+export async function signUp(
+  prevState: RegisterState,
+  formData: FormData,
+) {
+  const validatedFields = RegisterSchema.safeParse({
+    email: formData.get('email'),
+    password: formData.get('password'),
+    passwordConfirm: formData.get('passwordConfirm')
+  });
+
+  if (!validatedFields.success) {
+    return {
+      errors: validatedFields.error.flatten().fieldErrors,
+      message: 'Missing Fields. Failed to Register User.' 
+    }
+  }
+
+  try {
+    const userFromDb = await sql`SELECT * FROM users WHERE email = ${validatedFields.data.email}`
+    if (userFromDb.rowCount) {
+      return {
+        errors: {
+          email: ['Email is already taken.'],
+        },
+        message: 'You can log in if you already have an account.'
+      }
+    }
+  } catch {
+    return {
+      message: 'Something went wrong. Please try again.'
+    }
+  }
+
+  const { email, password } = validatedFields.data;
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await sql`
+      INSERT INTO users (name, email, password)
+      VALUES ('', ${email}, ${hashedPassword});
+    `
+  } catch {
+    return {
+      message: 'Database Error. Failed to create user.'
+    }
+  }
+
+  redirect('/login');
 }
